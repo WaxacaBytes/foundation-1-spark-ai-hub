@@ -12,6 +12,39 @@ OUTPUT_DIR = Path(os.environ.get("FOUNDATION_OUTPUT_DIR", "/outputs")).resolve()
 MODEL_REPO = "RoyalCities/Foundation-1"
 
 
+def patch_torchaudio_save() -> None:
+    import numpy as np
+    import soundfile as sf
+    import torch
+    import torchaudio
+
+    def save_compat(
+        uri,
+        src,
+        sample_rate,
+        channels_first=True,
+        format=None,
+        encoding=None,
+        bits_per_sample=None,
+        buffer_size=4096,
+        backend=None,
+        compression=None,
+    ):
+        del format, encoding, bits_per_sample, buffer_size, backend, compression
+
+        audio = src.detach().cpu() if isinstance(src, torch.Tensor) else torch.as_tensor(src).cpu()
+        if audio.ndim == 1:
+            audio = audio.unsqueeze(0)
+        if channels_first:
+            audio = audio.transpose(0, 1)
+
+        array = audio.numpy()
+        subtype = "PCM_16" if np.issubdtype(array.dtype, np.integer) else None
+        sf.write(uri, array, sample_rate, subtype=subtype)
+
+    torchaudio.save = save_compat
+
+
 def ensure_config() -> None:
     APP_DIR.mkdir(parents=True, exist_ok=True)
     MODELS_ROOT.mkdir(parents=True, exist_ok=True)
@@ -58,6 +91,8 @@ def main() -> None:
     import torch
     from stable_audio_tools.interface.gradio import create_ui
 
+    patch_torchaudio_save()
+
     port = int(os.environ.get("PORT", "7860"))
     ui = create_ui(
         model_config_path=str(model_config_path),
@@ -71,9 +106,9 @@ def main() -> None:
         server_port=port,
         share=False,
         show_error=True,
+        allowed_paths=[str(OUTPUT_DIR)],
     )
 
 
 if __name__ == "__main__":
     main()
-
